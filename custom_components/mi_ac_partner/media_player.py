@@ -59,7 +59,7 @@ DEFAULT_NAME = 'Xiaomi AC Partner'
 ICON = 'mdi:radio'
 
 # SCAN_INTERVAL = datetime.timedelta(seconds=50)
-UPDATE_STATION_LIST = datetime.timedelta(minutes=15)
+UPDATE_STATION_LIST = datetime.timedelta(minutes=60)
 
 SUPPORT_XIAOMIACPARTNER = SUPPORT_VOLUME_SET | SUPPORT_PAUSE | SUPPORT_PLAY |\
     SUPPORT_NEXT_TRACK | SUPPORT_PREVIOUS_TRACK | SUPPORT_SELECT_SOURCE | \
@@ -71,17 +71,20 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_TOKEN): vol.All(str, vol.Length(min=32, max=32)),
 }, extra=vol.ALLOW_EXTRA)
 
+import miio
+class MiDevice(miio.Device):
+    def send(self,*args):
+        #_LOGGER.debug('@@@@@@@@@@@@@@miio.send %s', str(args))
+        return miio.Device.send(self, *args)
 
 async def async_setup_platform(hass, config, async_add_devices, discovery_info = None):
-    # from miio import Device, DeviceException
-    from miio import Device, DeviceException
     name = config.get(CONF_NAME)
     host = config.get(CONF_HOST)
     token = config.get(CONF_TOKEN)
 
     _LOGGER.info('%s（网关）初始化......',name)
 
-    midevice = Device(host, token)
+    midevice = MiDevice(host, token)
     model = midevice.info().model
     acPartner = XiaomiacPartner(midevice, name, model)
 
@@ -136,18 +139,19 @@ class XiaomiacPartner(MediaPlayerDevice):
             self._state = STATE_OFF
 
         # Current station name, image url, program name, selected station
-        current_station_dict = await self.async_station_list_total_index(self._current_station_id)
-        if current_station_dict == None:
+        _stas = list(filter(lambda x:x.get('id')==self._current_station_id, self._station_list_total)) or None
+        if not _stas:
             self._image_url = None
             self._programname = None
-            self._current_station_name = str(self._current_station_id) + ' ' + '此电台当前失效，请到app内确认！'
+            self._current_station_name = str(self._current_station_id) + ' ' + '（电台失效?）'
             self._current_selected_station = None
         else:
+            current_station_dict = _stas[0]
             self._image_url = current_station_dict['coverLarge']
             self._current_station_name = current_station_dict['name']
             self._current_selected_station = str(self._current_station_id) + ' ' + self._current_station_name
             if 'programName' not in current_station_dict:
-                self._programname = '没有当前节目名'
+                self._programname = '未知节目'
                 _LOGGER.warning('%s（网关）的%s电台没有当前节目名。',self._name, self._current_selected_station)
             else:
                 self._programname = current_station_dict['programName']
@@ -176,7 +180,7 @@ class XiaomiacPartner(MediaPlayerDevice):
     def source_list(self):
         """Return a list of source devices."""
         if self._source_list:
-            return list(self._source_list)
+            return list(map(lambda x:'%s %s'%(x.get('id'),x.get('name')),self._source_list))
 
     @property
     def source(self):
@@ -219,7 +223,7 @@ class XiaomiacPartner(MediaPlayerDevice):
         return MEDIA_TYPE_MUSIC
 
     async def _fetch(self, url):
-        timeout = aiohttp.ClientTimeout(total=2) # 获取列表时最大10s超时
+        timeout = aiohttp.ClientTimeout(total=10) # 获取列表时最大10s超时
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=timeout) as response:
                 content = await response.text()
@@ -244,44 +248,29 @@ class XiaomiacPartner(MediaPlayerDevice):
 
     # 查询空调伴侣（网关）收音机的收藏电台清单
     async def async_favorites_station_list(self):
-        # Availabel Radio favorites stations list (max = 30)
-        chs0 = []
-        chs1 = []
-        chs2 = []
-        channels = self._midevice.send("get_channels", {"start": 0})
-        if channels:
-            chs0 = channels["chs"]
-            if len(chs0) == 10:
-                channels = self._midevice.send("get_channels", {"start": 10})
-                if channels:
-                    chs1 = channels["chs"]
-                    if len(chs1) == 10:
-                        channels = self._midevice.send("get_channels", {"start": 20})
-                        if channels:
-                            chs2 = channels["chs"]
-        else:
-            _LOGGER.error('%s（网关）中没有收藏的电台。请先到app里收藏至少一个电台，然后重启HA。',self._name)
-        favorites_station_list = chs0 + chs1 + chs2
-        self._favorites_station_list = favorites_station_list
-        return favorites_station_list
+        # Availabel Radio favorites stations list
+        chsx = []
+        channels = self._midevice.send("get_channels", {"start": 0}) or []
+        while channels:
+            _chs = channels["chs"]
+            chsx.extend(_chs)
+            if len(chsx) == 10:
+                channels = self._midevice.send("get_channels", {"start": 0}) or []
+            else:
+                break
+        if len(chsx) == 0:
+            _LOGGER.warning('%s（网关）中没有收藏的电台。',self._name)
+        self._favorites_station_list = chsx
+        return chsx
 
     # 生成media_player上电台选择列表
     @Throttle(UPDATE_STATION_LIST)
     async def async_generate_station_selection_list(self):
-        favorites_station_list = await self.async_favorites_station_list()
-        station_selection_list = []
-        list_count = len(favorites_station_list)
-        x = 0
-        while x <= list_count - 1:
-            favorites_station_id = favorites_station_list[x]['id']
-            favorites_station_dict = await self.async_station_list_total_index(favorites_station_id)
-            if favorites_station_dict == None:
-                favorites_station_name = str(favorites_station_list[x]['id']) + ' ' + '此电台当前失效，请到app内确认！'
-                _LOGGER.warning('%s（网关）中收藏的电台（代码：%s）当前不在自动生成的电台总表中，此电台可能已（临时）失效，请到app内确认。',self._name,favorites_station_list[x]['id'])
-            else:
-                favorites_station_name = str(favorites_station_list[x]['id']) + ' ' + favorites_station_dict['name']
-            x +=1
-            station_selection_list.append(favorites_station_name)
+        favorites_list = await self.async_favorites_station_list()
+        favorites_list_ids = list(map(lambda x:'%s'%x.get('id'), favorites_list))
+        _LOGGER.warning('%s（网关）收藏的电台：%s',self._name, favorites_list_ids)
+        station_selection_list = list(filter(lambda x:'%s'%x.get('id') in favorites_list_ids, self._station_list_total))
+        station_selection_list.extend(self._station_list_total)
         self._source_list = station_selection_list
 
     async def async_station_list_total_index(self, key):
@@ -306,30 +295,28 @@ class XiaomiacPartner(MediaPlayerDevice):
         self._get_prop = True
 
     async def async_radio_index(self, key):
-        if len(self._favorites_station_list) < 1:
-            _LOGGER.warning('%s（网关）请先在米家app端收藏至少一个电台！',self._name)
-            return False
         try:
-            for idx, val in enumerate(self._favorites_station_list):
-                if val["id"] == self._current_station_id:
-                    current_index = idx
-                    break
+            _idxs = list(map(lambda x:x.get('id'), self._source_list))
+            if self._current_station_id in _idxs:
+                current_index = _idxs.index(self._current_station_id)
             if key == 'next':
-                if current_index >= len(self._favorites_station_list) - 1:
+                if current_index >= len(self._source_list) - 1:
                     current_index = 0
                 else:
                     current_index += 1
             elif key == 'previous':
                 if current_index == 0:
-                    current_index = len(self._favorites_station_list) - 1
+                    current_index = len(self._source_list) - 1
                 else:
                     current_index -= 1
-        except UnboundLocalError:
-            _LOGGER.warning('%s（网关）当前播放电台不在电台选择列表中（在app中没有被收藏），换台直接跳到列表中的第一个。',self._name)
+        except:
+            _LOGGER.warning('%s（网关）换台直接跳转第一个。',self._name)
             current_index = 0
 
-        channel = self._favorites_station_list[current_index]
-        self._midevice.send("play_specify_fm", {'id': channel["id"], 'type': 0})
+        code = self._source_list[current_index].get('id')
+        url = self._source_list[current_index].get('playUrl',{}).get('aac64','')
+        self._midevice.send("play_specify_fm", {'id':int(code), 'type':0, 'url':url})
+        self._get_prop = True
 
     async def async_media_play(self):
         """Start or resume playback."""
@@ -355,11 +342,10 @@ class XiaomiacPartner(MediaPlayerDevice):
 
     async def async_select_source(self, source):
         """Select playback device."""
-        for i in range(len(self._source_list)):
-            if source in self._source_list[i]:
-                code = self._source_list[i].split(' ',1)[0]
-                break
-
-        self._midevice.send("play_specify_fm", {'id': int(code), 'type': 0})
-        self._get_prop = True
+        _stas = list(filter(lambda x:'%s %s'%(x.get('id'),x.get('name'))==source, self._source_list)) or None
+        if _stas:
+            code = _stas[0].get('id')
+            url = _stas[0].get('playUrl',{}).get('aac64','')
+            self._midevice.send("play_specify_fm", {'id':int(code), 'type':0, 'url':url})
+            self._get_prop = True
 
