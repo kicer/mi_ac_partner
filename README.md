@@ -13,3 +13,7 @@ media_player:
 1. 插件路径: ~/.homeassistant/custom_components/mi_ac_partner/
 2. 暂不支持设备搜索，host须设置。
 3. token可通过米家app获取。
+4. 播放列表包括所有电台，数量较多有些卡顿。
+
+### TODO
+1. 添加自定义播放列表支持
