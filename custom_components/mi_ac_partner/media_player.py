@@ -34,7 +34,7 @@ media_player:
 
 von(vaughan.zeng@gmail.com)
 '''
-import asyncio
+import asyncio,aiohttp,json
 from homeassistant.util import Throttle
 
 import logging
@@ -79,7 +79,7 @@ async def async_setup_platform(hass, config, async_add_devices, discovery_info =
     host = config.get(CONF_HOST)
     token = config.get(CONF_TOKEN)
 
-    _LOGGER.info('米家空调伴侣（网关）%s初始化......',name)
+    _LOGGER.info('%s（网关）初始化......',name)
 
     midevice = Device(host, token)
     model = midevice.info().model
@@ -148,7 +148,7 @@ class XiaomiacPartner(MediaPlayerDevice):
             self._current_selected_station = str(self._current_station_id) + ' ' + self._current_station_name
             if 'programName' not in current_station_dict:
                 self._programname = '没有当前节目名'
-                _LOGGER.warning('当前%s收音机的%s电台没有当前节目名。',self._name, self._current_selected_station)
+                _LOGGER.warning('%s（网关）的%s电台没有当前节目名。',self._name, self._current_selected_station)
             else:
                 self._programname = current_station_dict['programName']
 
@@ -218,18 +218,28 @@ class XiaomiacPartner(MediaPlayerDevice):
         """Return the media type."""
         return MEDIA_TYPE_MUSIC
 
+    async def _fetch(self, url):
+        timeout = aiohttp.ClientTimeout(total=2) # 获取列表时最大10s超时
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=timeout) as response:
+                content = await response.text()
+                data = json.loads(content)
+                if data['data']['totalSize'] > 0:
+                    return data['data']['data']
+
     # 爬虫抓取网页上电台总清单
     @Throttle(UPDATE_STATION_LIST)
     async def async_station_list_total(self):
         station_list_total = []
-        for id in range(1,20):
-            url = 'http://live.ximalaya.com/live-web/v2/radio/category?categoryId={}&pageNum=1&pageSize=300'
-            url = url.format(id)
-            response = urllib.request.urlopen(url).read()
-            if (eval(response))['data']['totalSize'] > 0:
-                station_list = (eval(response))['data']['data']
-                station_list_total = station_list_total + station_list
-        station_list_updatetime = (datetime.datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            for idx in range(1,20):
+                url = 'http://live.ximalaya.com/live-web/v2/radio/category?categoryId=%s&pageNum=1&pageSize=300' % idx
+                station_list = await self._fetch(url)
+                _LOGGER.info('%s（网关） load radio list>%s',self._name,idx)
+                if station_list:
+                    station_list_total = station_list_total + station_list
+        except:
+            pass
         self._station_list_total = station_list_total
 
     # 查询空调伴侣（网关）收音机的收藏电台清单
@@ -250,7 +260,7 @@ class XiaomiacPartner(MediaPlayerDevice):
                         if channels:
                             chs2 = channels["chs"]
         else:
-            _LOGGER.error('空调伴侣（网关）%s中没有收藏的电台。请先到app里收藏至少一个电台，然后重启HA。',self._name)
+            _LOGGER.error('%s（网关）中没有收藏的电台。请先到app里收藏至少一个电台，然后重启HA。',self._name)
         favorites_station_list = chs0 + chs1 + chs2
         self._favorites_station_list = favorites_station_list
         return favorites_station_list
@@ -267,7 +277,7 @@ class XiaomiacPartner(MediaPlayerDevice):
             favorites_station_dict = await self.async_station_list_total_index(favorites_station_id)
             if favorites_station_dict == None:
                 favorites_station_name = str(favorites_station_list[x]['id']) + ' ' + '此电台当前失效，请到app内确认！'
-                _LOGGER.warning('空调伴侣（网关）%s中收藏的电台（代码：%s）当前不在自动生成的电台总表中，此电台可能已（临时）失效，请到app内确认。',self._name,favorites_station_list[x]['id'])
+                _LOGGER.warning('%s（网关）中收藏的电台（代码：%s）当前不在自动生成的电台总表中，此电台可能已（临时）失效，请到app内确认。',self._name,favorites_station_list[x]['id'])
             else:
                 favorites_station_name = str(favorites_station_list[x]['id']) + ' ' + favorites_station_dict['name']
             x +=1
@@ -297,7 +307,7 @@ class XiaomiacPartner(MediaPlayerDevice):
 
     async def async_radio_index(self, key):
         if len(self._favorites_station_list) < 1:
-            _LOGGER.warning('请先在米家app端里对相应的%s空调伴侣（网关）收音机收藏至少一个电台！',self._name)
+            _LOGGER.warning('%s（网关）请先在米家app端收藏至少一个电台！',self._name)
             return False
         try:
             for idx, val in enumerate(self._favorites_station_list):
@@ -315,7 +325,7 @@ class XiaomiacPartner(MediaPlayerDevice):
                 else:
                     current_index -= 1
         except UnboundLocalError:
-            _LOGGER.warning('当前%s播放电台不在电台选择列表中（在app中没有被收藏），换台直接跳到列表中的第一个。',self._name)
+            _LOGGER.warning('%s（网关）当前播放电台不在电台选择列表中（在app中没有被收藏），换台直接跳到列表中的第一个。',self._name)
             current_index = 0
 
         channel = self._favorites_station_list[current_index]
