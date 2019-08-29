@@ -1,5 +1,5 @@
-# 米家网关收音机homeassistant插件
-Fork from (@vonzeng)[https://bbs.hassbian.com/forum.php?mod=viewthread&tid=6934]
+# 米家网关收音机home-assistant插件
+Fork from [@vonzeng "更新v0.04：米家网关、空调伴侣收音机功能插件"](https://bbs.hassbian.com/thread-6934-1-1.html)
 
 ### Usage
 ```
@@ -10,6 +10,6 @@ media_player:
     token: 'xxx'
 ```
 
-1. 插件路径: ~/.homeassistant/custom_components/mi_ac_partner/media_player.py
+1. 插件路径: ~/.homeassistant/custom_components/mi_ac_partner/
 2. 暂不支持设备搜索，host须设置。
 3. token可通过米家app获取。
